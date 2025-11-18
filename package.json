@@ -19,6 +19,7 @@
     "build:agent-configs": "npm run build --workspace=agent-configs-service",
     "build:gateway": "npm run build --workspace=gateway",
     "build:shared": "npm run build --workspace=shared",
+    "start": "node services/user-service/dist/index.js",
     "start:user": "node services/user-service/dist/index.js",
     "start:agent-configs": "node services/agent-configs-service/dist/index.js",
     "start:gateway": "node gateway/dist/index.js",
