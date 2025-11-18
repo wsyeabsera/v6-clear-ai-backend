@@ -1,9 +1,0 @@
-[phases.setup]
-nixPkgs = ["nodejs-18_x"]
-
-[phases.install]
-cmds = ["npm install"]
-
-[phases.build]
-cmds = ["npm run build:shared", "npm run build"]
-
