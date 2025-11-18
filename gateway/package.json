@@ -1,0 +1,26 @@
+{
+  "name": "gateway",
+  "version": "1.0.0",
+  "description": "Apollo Gateway for microservices federation",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@apollo/server": "^4.10.0",
+    "@apollo/gateway": "^2.6.3",
+    "graphql": "^16.8.1",
+    "dotenv": "^16.3.1",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "@types/cors": "^2.8.17",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
+

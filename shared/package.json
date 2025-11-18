@@ -1,0 +1,22 @@
+{
+  "name": "shared",
+  "version": "1.0.0",
+  "description": "Shared code for microservices",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.3",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.4",
+    "@types/node": "^20.10.6",
+    "typescript": "^5.3.3"
+  }
+}
+

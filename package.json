@@ -1,0 +1,39 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "Microservices backend with Apollo Federation and RabbitMQ",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "services/*",
+    "gateway"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:user\" \"npm run dev:agent-configs\" \"npm run dev:gateway\"",
+    "dev:user": "npm run dev --workspace=user-service",
+    "dev:agent-configs": "npm run dev --workspace=agent-configs-service",
+    "dev:gateway": "npm run dev --workspace=gateway",
+    "dev:shared": "npm run dev --workspace=shared",
+    "build": "npm run build --workspaces",
+    "build:user": "npm run build --workspace=user-service",
+    "build:agent-configs": "npm run build --workspace=agent-configs-service",
+    "build:gateway": "npm run build --workspace=gateway",
+    "build:shared": "npm run build --workspace=shared",
+    "start:user": "node services/user-service/dist/index.js",
+    "start:agent-configs": "node services/agent-configs-service/dist/index.js",
+    "start:gateway": "node gateway/dist/index.js",
+    "clean": "rm -rf node_modules && rm -rf */node_modules && rm -rf services/*/node_modules",
+    "test:rabbitmq": "tsx test-rabbitmq.ts",
+    "test:events": "tsx test-events.ts",
+    "test:rabbitmq-live": "tsx test-rabbitmq-live.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
+
