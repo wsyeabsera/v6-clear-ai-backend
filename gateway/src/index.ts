@@ -2,10 +2,10 @@ import { ApolloServer } from '@apollo/server';
 import { startStandaloneServer } from '@apollo/server/standalone';
 import { ApolloGateway, IntrospectAndCompose, RemoteGraphQLDataSource } from '@apollo/gateway';
 import * as dotenv from 'dotenv';
-import * as path from 'path';
 
-// Load .env from root backend directory
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+// Load .env if it exists (for local development)
+// Railway uses environment variables directly, so this is optional
+dotenv.config();
 
 // Custom data source to forward headers
 class AuthenticatedDataSource extends RemoteGraphQLDataSource {
@@ -38,7 +38,8 @@ async function waitForService(url: string, maxRetries = 30, delayMs = 1000): Pro
 }
 
 async function startGateway() {
-  const PORT = parseInt(process.env.GATEWAY_PORT || '4000');
+  // Railway provides PORT, fallback to GATEWAY_PORT for local dev
+  const PORT = parseInt(process.env.PORT || process.env.GATEWAY_PORT || '4000');
 
   // Wait for services to be ready before starting gateway
   console.log('⏳ Waiting for subgraph services to be ready...');

@@ -2,17 +2,18 @@ import { ApolloServer } from '@apollo/server';
 import { startStandaloneServer } from '@apollo/server/standalone';
 import { buildSubgraphSchema } from '@apollo/subgraph';
 import * as dotenv from 'dotenv';
-import * as path from 'path';
 import { typeDefs } from './schema';
 import { createResolvers } from './resolvers';
 import { Database } from './database';
 import { AuthService } from './auth';
 
-// Load .env from root backend directory
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+// Load .env if it exists (for local development)
+// Railway uses environment variables directly, so this is optional
+dotenv.config();
 
 async function startServer() {
-  const PORT = parseInt(process.env.AGENT_CONFIGS_SERVICE_PORT || '4003');
+  // Railway provides PORT, fallback to AGENT_CONFIGS_SERVICE_PORT for local dev
+  const PORT = parseInt(process.env.PORT || process.env.AGENT_CONFIGS_SERVICE_PORT || '4003');
 
   // Initialize database
   const db = new Database();
