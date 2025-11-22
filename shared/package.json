@@ -7,16 +7,31 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage --run",
+    "test:coverage:open": "vitest --coverage --run && open coverage/index.html",
+    "test:integration": "vitest --run -t 'Integration Tests'",
+    "test:integration:local": "vitest --run -t 'LocalFileContextManager Integration Tests'",
+    "test:integration:mongo": "vitest --run -t 'MongoContextManager Integration Tests'",
+    "test:integration:pinecone": "vitest --run -t 'PineconeContextManager Integration Tests'",
+    "test:integration:factory": "vitest --run -t 'ContextManagerFactory Integration Tests'",
+    "test:unit": "vitest --run --exclude **/*.integration.test.ts"
   },
   "dependencies": {
     "amqplib": "^0.10.3",
-    "dotenv": "^16.3.1"
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "mongodb": "^6.3.0",
+    "@pinecone-database/pinecone": "^1.1.2"
   },
   "devDependencies": {
     "@types/amqplib": "^0.10.4",
     "@types/node": "^20.10.6",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0",
+    "@vitest/coverage-v8": "^1.2.0"
   }
 }
 
