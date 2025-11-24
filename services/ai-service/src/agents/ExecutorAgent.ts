@@ -1,11 +1,14 @@
 import { v4 as uuidv4 } from 'uuid';
-import { Plan, PlanStep, Execution, ExecutionStep } from '../types';
+import { Plan, PlanStep, Execution } from '../types';
 import { KernelAdapter } from '../kernel/KernelAdapter';
 
 export interface ExecutorAgentOptions {
   plan: Plan;
   kernelAdapter: KernelAdapter;
 }
+
+// Re-export Execution type for convenience
+export type { Execution };
 
 export class ExecutorAgent {
   async executePlan(options: ExecutorAgentOptions): Promise<Execution> {

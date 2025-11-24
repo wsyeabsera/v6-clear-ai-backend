@@ -81,7 +81,8 @@ export class KernelAdapter {
 
     // Initialize Tool Registry
     const toolRegistryType = (process.env.TOOL_REGISTRY_TYPE || 'local') as ToolRegistryType;
-    this.toolRegistry = ToolRegistryFactory.create(toolRegistryType);
+    const toolRegistryConfig = this.getToolRegistryConfig(toolRegistryType);
+    this.toolRegistry = ToolRegistryFactory.create(toolRegistryType, toolRegistryConfig);
   }
 
   private getContextManagerConfig(type: ContextManagerType): ContextManagerConfig | undefined {
@@ -128,6 +129,23 @@ export class KernelAdapter {
             apiUrl: process.env.OLLAMA_API_URL || 'http://localhost:11434',
             model: process.env.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text',
           },
+        };
+      default:
+        return undefined;
+    }
+  }
+
+  private getToolRegistryConfig(type: ToolRegistryType): any {
+    switch (type) {
+      case ToolRegistryType.LOCAL:
+        return {
+          initialTools: [], // Start with empty tools, can be populated later
+        };
+      case ToolRegistryType.MCP:
+        return {
+          baseUrl: process.env.MCP_SERVER_URL || 'http://localhost:5011',
+          timeout: parseInt(process.env.MCP_SERVER_TIMEOUT || '30000', 10),
+          apiPath: process.env.MCP_API_PATH || '',
         };
       default:
         return undefined;

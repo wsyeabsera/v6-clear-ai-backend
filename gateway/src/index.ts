@@ -388,9 +388,9 @@ async function startGateway() {
   };
 
   app.use('/graphql', (req, res, next) => {
+    // Let CORS middleware handle OPTIONS requests
     if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
+      return next();
     }
 
     // #region agent log

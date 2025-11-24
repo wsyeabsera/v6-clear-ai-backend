@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { Message } from 'shared';
+import { Message, Tool } from 'shared';
 import { ConversationService } from '../services/conversation/ConversationService';
 import { KernelAdapter } from '../kernel/KernelAdapter';
 import { ThoughtAgent } from '../agents/ThoughtAgent';
@@ -78,6 +78,25 @@ export class AgentModeHandler {
         throw new Error(`Failed to fetch agent config: ${configError?.message || 'Unknown error'}`);
       }
 
+      // 4.5. Discover available tools from kernel registry
+      let availableTools: Tool[] = [];
+      try {
+        // Discover tools - pass empty query to get all tools, or use query for scoped discovery
+        availableTools = await this.kernelAdapter.toolRegistry.discoverTools('', 100);
+        
+        // Emit event: tools discovered
+        await this.kernelAdapter.eventBus.emit('ai-service.agent.tools.discovered', {
+          toolCount: availableTools.length,
+          toolNames: availableTools.map(t => t.name),
+        }, {
+          sessionId: finalSessionId,
+          userId,
+        });
+      } catch (toolError: any) {
+        console.warn('⚠️  Failed to discover tools from registry:', toolError);
+        // Continue with empty tool list - agents will generate manual steps
+      }
+
       // 5. Generate Thought
       let thought;
       try {
@@ -85,6 +104,7 @@ export class AgentModeHandler {
           query,
           context,
           agentConfig,
+          availableTools,
         });
       } catch (thoughtError: any) {
         throw new Error(`Failed to generate thought: ${thoughtError?.message || 'Unknown error'}`);
@@ -106,28 +126,63 @@ export class AgentModeHandler {
           thought,
           context,
           agentConfig,
+          availableTools,
         });
       } catch (planError: any) {
         throw new Error(`Failed to generate plan: ${planError?.message || 'Unknown error'}`);
       }
 
-      // 8. Emit event: plan completed
+      // 8. Validate plan tools and parameters
+      const toolValidationErrors: string[] = [];
+      for (const step of plan.steps) {
+        if (step.tool) {
+          try {
+            const validation = await this.kernelAdapter.toolRegistry.validateTool(
+              step.tool,
+              step.parameters || {}
+            );
+            if (!validation.valid) {
+              const errorMsg = `Step ${step.order} tool "${step.tool}" validation failed: ${validation.errors?.join(', ')}`;
+              toolValidationErrors.push(errorMsg);
+              console.warn(`⚠️  ${errorMsg}`);
+            }
+          } catch (validationError: any) {
+            const errorMsg = `Step ${step.order} tool "${step.tool}" validation error: ${validationError?.message}`;
+            toolValidationErrors.push(errorMsg);
+            console.warn(`⚠️  ${errorMsg}`);
+          }
+        }
+      }
+
+      // Emit validation warnings if any
+      if (toolValidationErrors.length > 0) {
+        await this.kernelAdapter.eventBus.emit('ai-service.agent.validation.warnings', {
+          planId: plan.id,
+          warnings: toolValidationErrors,
+        }, {
+          sessionId: finalSessionId,
+          userId,
+        });
+      }
+
+      // 9. Emit event: plan completed
       await this.kernelAdapter.eventBus.emit('ai-service.agent.plan.completed', {
         planId: plan.id,
         stepCount: plan.steps.length,
+        validationWarnings: toolValidationErrors.length,
       }, {
         sessionId: finalSessionId,
         userId,
       });
 
-      // 9. Execute Plan (with iteration support)
+      // 10. Execute Plan (with iteration support)
       let finalExecution: Execution | null = null;
       let iteration = 0;
 
       while (iteration < maxIterations) {
         iteration++;
 
-        // 10. Emit event: executor started
+        // 11. Emit event: executor started
         await this.kernelAdapter.eventBus.emit('ai-service.agent.executor.started', {
           planId: plan.id,
           iteration,
@@ -136,13 +191,13 @@ export class AgentModeHandler {
           userId,
         });
 
-        // 11. Execute plan
+        // 12. Execute plan
         const execution = await this.executorAgent.executePlan({
           plan,
           kernelAdapter: this.kernelAdapter,
         });
 
-        // 12. Emit event: executor completed
+        // 13. Emit event: executor completed
         await this.kernelAdapter.eventBus.emit('ai-service.agent.executor.completed', {
           executionId: execution.plan.id,
           status: execution.status,
@@ -152,7 +207,7 @@ export class AgentModeHandler {
           userId,
         });
 
-        // 13. Reflect on execution
+        // 14. Reflect on execution
         const reflection = await this.reflectionAgent.reflect({
           query,
           plan,
@@ -161,7 +216,7 @@ export class AgentModeHandler {
           agentConfig,
         });
 
-        // 14. Emit event: reflection completed
+        // 15. Emit event: reflection completed
         await this.kernelAdapter.eventBus.emit('ai-service.agent.reflection.completed', {
           executionId: execution.plan.id,
           success: reflection.success,
@@ -191,7 +246,7 @@ export class AgentModeHandler {
         throw new Error('Execution failed to complete');
       }
 
-      // 15. Save user message
+      // 16. Save user message
       const userMessage: Message = {
         id: uuidv4(),
         role: 'user',
@@ -200,7 +255,7 @@ export class AgentModeHandler {
       };
       await this.conversationService.addMessage(finalSessionId, userMessage, userId);
 
-      // 16. Save execution as assistant message
+      // 17. Save execution as assistant message
       const executionMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
@@ -212,7 +267,7 @@ export class AgentModeHandler {
       };
       await this.conversationService.addMessage(finalSessionId, executionMessage, userId);
 
-      // 17. Emit event: execution completed
+      // 18. Emit event: execution completed
       await this.kernelAdapter.eventBus.emit('ai-service.agent.execution.completed', {
         executionId: finalExecution.plan.id,
         status: finalExecution.status,
@@ -222,7 +277,7 @@ export class AgentModeHandler {
         userId,
       });
 
-      // 18. Return Execution Response
+      // 19. Return Execution Response
       return {
         id: finalExecution.plan.id,
         sessionId: finalSessionId,

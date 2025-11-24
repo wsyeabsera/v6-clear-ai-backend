@@ -1,6 +1,5 @@
 import { LLMProviderFactory } from '../services/llm/LLMProviderFactory';
 import { AgentConfig, ConversationContext, Execution } from '../types';
-import { ExecutorAgent } from './ExecutorAgent';
 
 export interface Reflection {
   success: boolean;

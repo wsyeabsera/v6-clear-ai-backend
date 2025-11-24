@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { Message } from 'shared';
+import { Message, Tool } from 'shared';
 import { ConversationService } from '../services/conversation/ConversationService';
 import { KernelAdapter } from '../kernel/KernelAdapter';
 import { ThoughtAgent } from '../agents/ThoughtAgent';
@@ -71,6 +71,25 @@ export class PlanModeHandler {
         throw new Error(`Failed to fetch agent config: ${configError?.message || 'Unknown error'}`);
       }
 
+      // 4.5. Discover available tools from kernel registry
+      let availableTools: Tool[] = [];
+      try {
+        // Discover tools - pass empty query to get all tools, or use query for scoped discovery
+        availableTools = await this.kernelAdapter.toolRegistry.discoverTools('', 100);
+        
+        // Emit event: tools discovered
+        await this.kernelAdapter.eventBus.emit('ai-service.plan.tools.discovered', {
+          toolCount: availableTools.length,
+          toolNames: availableTools.map(t => t.name),
+        }, {
+          sessionId: finalSessionId,
+          userId,
+        });
+      } catch (toolError: any) {
+        console.warn('⚠️  Failed to discover tools from registry:', toolError);
+        // Continue with empty tool list - agents will generate manual steps
+      }
+
       // 5. Generate Thought (reasoning phase)
       let thought;
       try {
@@ -78,6 +97,7 @@ export class PlanModeHandler {
           query,
           context,
           agentConfig,
+          availableTools,
         });
       } catch (thoughtError: any) {
         throw new Error(`Failed to generate thought: ${thoughtError?.message || 'Unknown error'}`);
@@ -101,23 +121,58 @@ export class PlanModeHandler {
           thought,
           context,
           agentConfig,
+          availableTools,
         });
       } catch (planError: any) {
         throw new Error(`Failed to generate plan: ${planError?.message || 'Unknown error'}`);
       }
 
-      // 8. Emit event: plan generated
+      // 8. Validate plan tools and parameters
+      const toolValidationErrors: string[] = [];
+      for (const step of plan.steps) {
+        if (step.tool) {
+          try {
+            const validation = await this.kernelAdapter.toolRegistry.validateTool(
+              step.tool,
+              step.parameters || {}
+            );
+            if (!validation.valid) {
+              const errorMsg = `Step ${step.order} tool "${step.tool}" validation failed: ${validation.errors?.join(', ')}`;
+              toolValidationErrors.push(errorMsg);
+              console.warn(`⚠️  ${errorMsg}`);
+            }
+          } catch (validationError: any) {
+            const errorMsg = `Step ${step.order} tool "${step.tool}" validation error: ${validationError?.message}`;
+            toolValidationErrors.push(errorMsg);
+            console.warn(`⚠️  ${errorMsg}`);
+          }
+        }
+      }
+
+      // Emit validation warnings if any
+      if (toolValidationErrors.length > 0) {
+        await this.kernelAdapter.eventBus.emit('ai-service.plan.validation.warnings', {
+          planId: plan.id,
+          warnings: toolValidationErrors,
+        }, {
+          sessionId: finalSessionId,
+          userId,
+        });
+      }
+
+      // 9. Emit event: plan generated
       await this.kernelAdapter.eventBus.emit('ai-service.plan.plan.generated', {
         planId: plan.id,
         stepCount: plan.steps.length,
         confidence: plan.confidence,
         requiredTools: plan.requiredTools,
+        validationWarnings: toolValidationErrors.length,
       }, {
         sessionId: finalSessionId,
         userId,
       });
 
-      // 9. Save user message to conversation
+      // 10. Save user message to conversation
       const userMessage: Message = {
         id: uuidv4(),
         role: 'user',
@@ -126,7 +181,7 @@ export class PlanModeHandler {
       };
       await this.conversationService.addMessage(finalSessionId, userMessage, userId);
 
-      // 10. Save plan as assistant message (store plan JSON)
+      // 11. Save plan as assistant message (store plan JSON)
       const planMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
@@ -138,7 +193,7 @@ export class PlanModeHandler {
       };
       await this.conversationService.addMessage(finalSessionId, planMessage, userId);
 
-      // 11. Emit event: plan completed
+      // 12. Emit event: plan completed
       await this.kernelAdapter.eventBus.emit('ai-service.plan.completed', {
         planId: plan.id,
         sessionId: finalSessionId,
@@ -147,7 +202,7 @@ export class PlanModeHandler {
         userId,
       });
 
-      // 12. Return Plan Response
+      // 13. Return Plan Response
       return {
         id: plan.id,
         sessionId: finalSessionId,

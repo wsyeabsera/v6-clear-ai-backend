@@ -7,6 +7,8 @@ import { Database } from '../../database';
 import { KernelAdapter } from '../../kernel/KernelAdapter';
 import { ConversationService } from '../../services/conversation/ConversationService';
 import { AskModeHandler } from '../../handlers/AskModeHandler';
+import { PlanModeHandler } from '../../handlers/PlanModeHandler';
+import { AgentModeHandler } from '../../handlers/AgentModeHandler';
 import { createResolvers } from '../../schema/resolvers';
 import { typeDefs } from '../../schema/typeDefs';
 import { AuthService } from '../../auth';
@@ -65,9 +67,11 @@ describe('AI Service GraphQL API Integration Tests', () => {
     kernelAdapter = new KernelAdapter();
     conversationService = new ConversationService(db, kernelAdapter);
     askModeHandler = new AskModeHandler(conversationService, kernelAdapter);
+    const planModeHandler = new PlanModeHandler(conversationService, kernelAdapter);
+    const agentModeHandler = new AgentModeHandler(conversationService, kernelAdapter);
 
     // Create Apollo Server
-    const resolvers = createResolvers(db, kernelAdapter, conversationService, askModeHandler);
+    const resolvers = createResolvers(db, kernelAdapter, conversationService, askModeHandler, planModeHandler, agentModeHandler);
     server = new ApolloServer({
       schema: buildSubgraphSchema([{ typeDefs, resolvers }]),
     });

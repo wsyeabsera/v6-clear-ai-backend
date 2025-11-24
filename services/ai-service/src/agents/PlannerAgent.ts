@@ -1,17 +1,43 @@
 import { v4 as uuidv4 } from 'uuid';
 import { LLMProviderFactory } from '../services/llm/LLMProviderFactory';
 import { AgentConfig, ConversationContext, Plan, PlanStep, Thought } from '../types';
+import { Tool } from 'shared';
 
 export interface PlannerAgentOptions {
   query: string;
   thought: Thought;
   context: ConversationContext;
   agentConfig: AgentConfig;
+  availableTools?: Tool[];
 }
 
 export class PlannerAgent {
   async generatePlan(options: PlannerAgentOptions): Promise<Plan> {
-    const { query, thought, context, agentConfig } = options;
+    const { query, thought, context, agentConfig, availableTools = [] } = options;
+
+    // Build tools section for prompt
+    let toolsSection = '';
+    if (availableTools.length > 0) {
+      toolsSection = `\n\nAvailable Tools (ONLY use these tools):
+${availableTools.map(tool => {
+  const requiredParams = tool.inputSchema.required || [];
+  const allParams = Object.keys(tool.inputSchema.properties || {});
+  const optionalParams = allParams.filter(p => !requiredParams.includes(p));
+  
+  return `- ${tool.name}: ${tool.description}
+  Required parameters: ${requiredParams.length > 0 ? requiredParams.join(', ') : 'none'}
+  Optional parameters: ${optionalParams.length > 0 ? optionalParams.join(', ') : 'none'}
+  Parameter schema: ${JSON.stringify(tool.inputSchema.properties || {})}`;
+}).join('\n\n')}
+
+IMPORTANT: 
+- You MUST ONLY use tools from the list above. 
+- If you reference a tool in a step, use its exact name as shown above.
+- If no suitable tool exists for a step, omit the "tool" field (making it a manual step).
+- Do NOT invent or hallucinate tool names that are not in this list.`;
+    } else {
+      toolsSection = '\n\nNote: No tools are currently available. All steps must be manual steps (do not include "tool" field in any step).';
+    }
 
     // Create a specialized prompt for planning
     const planningPrompt = `You are a planning agent. Based on the reasoning provided, create a structured plan to accomplish the user's goal.
@@ -24,7 +50,7 @@ ${thought.reasoning}
 ${thought.considerations.length > 0 ? `\nConsiderations:\n${thought.considerations.map(c => `- ${c}`).join('\n')}` : ''}
 ${thought.assumptions.length > 0 ? `\nAssumptions:\n${thought.assumptions.map(a => `- ${a}`).join('\n')}` : ''}
 
-${context.messages.length > 0 ? `\nConversation Context:\n${context.messages.slice(-3).map(m => `${m.role}: ${m.content}`).join('\n')}` : ''}
+${context.messages.length > 0 ? `\nConversation Context:\n${context.messages.slice(-3).map(m => `${m.role}: ${m.content}`).join('\n')}` : ''}${toolsSection}
 
 Create a detailed, step-by-step plan. Each step should be clear and actionable. If a step requires a tool, specify which tool and what parameters.
 
@@ -34,14 +60,14 @@ Format your response as JSON with the following structure:
     {
       "order": 1,
       "description": "Step description",
-      "tool": "tool-name (optional)",
-      "parameters": {"param": "value"} (optional),
+      "tool": "tool-name (optional - ONLY if tool exists in available tools list)",
+      "parameters": {"param": "value"} (optional - ONLY if tool is specified),
       "dependencies": [] (array of step order numbers this step depends on)
     },
     ...
   ],
   "estimatedDuration": 60 (optional, in seconds),
-  "requiredTools": ["tool1", "tool2", ...] (optional),
+  "requiredTools": ["tool1", "tool2", ...] (list of tools actually used from available tools),
   "confidence": 0.85 (0-1 scale),
   "reasoning": "Brief explanation of the plan approach"
 }`;
@@ -81,14 +107,26 @@ Format your response as JSON with the following structure:
         throw new Error('Plan must have at least one step');
       }
 
-      const steps: PlanStep[] = planData.steps.map((step, index) => ({
-        id: uuidv4(),
-        order: step.order || index + 1,
-        description: step.description || `Step ${index + 1}`,
-        tool: step.tool,
-        parameters: step.parameters,
-        dependencies: Array.isArray(step.dependencies) ? step.dependencies : [],
-      }));
+      // Create a map of available tool names for validation
+      const availableToolNames = new Set(availableTools.map(t => t.name));
+
+      const steps: PlanStep[] = planData.steps.map((step, index) => {
+        // Validate tool if specified
+        let validatedTool = step.tool;
+        if (step.tool && !availableToolNames.has(step.tool)) {
+          console.warn(`⚠️  Step ${index + 1} references unknown tool "${step.tool}". Converting to manual step.`);
+          validatedTool = undefined; // Convert to manual step
+        }
+
+        return {
+          id: uuidv4(),
+          order: step.order || index + 1,
+          description: step.description || `Step ${index + 1}`,
+          tool: validatedTool,
+          parameters: validatedTool ? step.parameters : undefined, // Only keep params if tool is valid
+          dependencies: Array.isArray(step.dependencies) ? step.dependencies : [],
+        };
+      });
 
       // Validate dependencies
       const stepOrders = new Set(steps.map(s => s.order));
@@ -100,11 +138,18 @@ Format your response as JSON with the following structure:
         }
       }
 
+      // Normalize requiredTools to only include tools that are actually available and used
+      const actuallyUsedTools = steps
+        .filter(s => s.tool)
+        .map(s => s.tool as string);
+      const uniqueUsedTools = Array.from(new Set(actuallyUsedTools));
+      const validRequiredTools = uniqueUsedTools.filter(t => availableToolNames.has(t));
+
       return {
         id: uuidv4(),
         steps,
         estimatedDuration: planData.estimatedDuration,
-        requiredTools: Array.isArray(planData.requiredTools) ? planData.requiredTools : [],
+        requiredTools: validRequiredTools,
         confidence: Math.max(0, Math.min(1, planData.confidence || 0.7)),
         reasoning: planData.reasoning || thought.reasoning,
       };
