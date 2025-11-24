@@ -140,7 +140,10 @@ describe('PineconeMemorySystem', () => {
 
       expect(mockUpsert).toHaveBeenCalled();
       const upsertCall = mockUpsert.mock.calls[0];
-      expect(upsertCall[0][0].values).toEqual(new Array(768).fill(0));
+      // Fallback vector has first element as 0.0001 to avoid Pinecone's all-zero restriction
+      const expectedVector = new Array(768).fill(0);
+      expectedVector[0] = 0.0001;
+      expect(upsertCall[0][0].values).toEqual(expectedVector);
     });
   });
 
@@ -189,7 +192,10 @@ describe('PineconeMemorySystem', () => {
 
       expect(mockUpsert).toHaveBeenCalled();
       const upsertCall = mockUpsert.mock.calls[0];
-      expect(upsertCall[0][0].values).toEqual(new Array(768).fill(0));
+      // Fallback vector has first element as 0.0001 to avoid Pinecone's all-zero restriction
+      const expectedVector = new Array(768).fill(0);
+      expectedVector[0] = 0.0001;
+      expect(upsertCall[0][0].values).toEqual(expectedVector);
     });
 
     it('should store object data with dataType metadata', async () => {
@@ -275,9 +281,12 @@ describe('PineconeMemorySystem', () => {
 
       await memorySystem.searchSimilar('query');
 
+      // Fallback vector has first element as 0.0001 to avoid Pinecone's all-zero restriction
+      const expectedVector = new Array(768).fill(0);
+      expectedVector[0] = 0.0001;
       expect(mockQuery).toHaveBeenCalledWith(
         expect.objectContaining({
-          vector: new Array(768).fill(0),
+          vector: expectedVector,
         })
       );
     });
@@ -296,9 +305,12 @@ describe('PineconeMemorySystem', () => {
       await systemWithEmbeddings.searchSimilar('query');
 
       expect(mockGenerateEmbedding).toHaveBeenCalledWith('query');
+      // Fallback vector has first element as 0.0001 to avoid Pinecone's all-zero restriction
+      const expectedVector = new Array(768).fill(0);
+      expectedVector[0] = 0.0001;
       expect(mockQuery).toHaveBeenCalledWith(
         expect.objectContaining({
-          vector: new Array(768).fill(0),
+          vector: expectedVector,
         })
       );
     });

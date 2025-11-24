@@ -9,6 +9,7 @@ import {
 import { LocalFileContextManager } from './implementations/LocalFileContextManager';
 import { MongoContextManager } from './implementations/MongoContextManager';
 import { PineconeContextManager } from './implementations/PineconeContextManager';
+import { KernelErrors } from '../errors';
 
 export class ContextManagerFactory {
   static create(
@@ -18,28 +19,38 @@ export class ContextManagerFactory {
     switch (type) {
       case ContextManagerType.LOCAL:
         if (!config || !('basePath' in config)) {
-          throw new Error('LocalFileContextManager requires basePath in config');
+          throw KernelErrors.missingConfig('ContextManagerFactory', 'basePath', { type: 'local-file' });
         }
         return new LocalFileContextManager(config as LocalFileConfig);
 
       case ContextManagerType.MONGO:
         if (!config || !('connectionString' in config)) {
-          throw new Error(
-            'MongoContextManager requires connectionString and databaseName in config'
+          throw KernelErrors.missingConfig(
+            'ContextManagerFactory',
+            'connectionString and databaseName',
+            undefined,
+            { type: 'mongo' }
           );
         }
         return new MongoContextManager(config as MongoConfig);
 
       case ContextManagerType.PINECONE:
         if (!config || !('apiKey' in config)) {
-          throw new Error(
-            'PineconeContextManager requires apiKey and indexName in config'
+          throw KernelErrors.missingConfig(
+            'ContextManagerFactory',
+            'apiKey and indexName',
+            undefined,
+            { type: 'pinecone' }
           );
         }
         return new PineconeContextManager(config as PineconeConfig);
 
       default:
-        throw new Error(`Invalid context manager type: ${type}`);
+        throw KernelErrors.invalidConfig(
+          'ContextManagerFactory',
+          'type',
+          `Invalid context manager type: ${type}`
+        );
     }
   }
 }

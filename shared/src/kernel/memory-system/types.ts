@@ -1,5 +1,6 @@
 // Reuse Message type from context-manager
 import { Message } from '../context-manager/types';
+export { Message };
 
 // Memory interface representing a stored memory
 export interface Memory {

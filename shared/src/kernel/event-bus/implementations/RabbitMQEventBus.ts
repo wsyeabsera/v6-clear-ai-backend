@@ -19,7 +19,7 @@ interface HandlerRegistry {
 export class RabbitMQEventBus implements IEventBus {
   private client: RabbitMQClient;
   private config: Required<Pick<RabbitMQEventConfig, 'serviceName' | 'defaultExchange' | 'internalQueuePrefix'>> &
-    Pick<RabbitMQEventConfig, 'url'>;
+    Pick<RabbitMQEventConfig, 'url' | 'deadLetterExchange'>;
   private internalQueueName: string;
   private handlers: Map<string, HandlerRegistry> = new Map();
   private isConnected: boolean = false;
@@ -34,6 +34,7 @@ export class RabbitMQEventBus implements IEventBus {
       serviceName: config.serviceName,
       defaultExchange: config.defaultExchange || config.serviceName,
       internalQueuePrefix: config.internalQueuePrefix || `${config.serviceName}.internal`,
+      deadLetterExchange: config.deadLetterExchange,
     };
 
     this.internalQueueName = this.config.internalQueuePrefix;
@@ -44,19 +45,25 @@ export class RabbitMQEventBus implements IEventBus {
    * Initialize connection and set up queues/exchanges
    */
   async connect(): Promise<void> {
-    if (this.isConnected) {
+    if (this.isConnected && this.client.isConnected()) {
       return;
     }
 
-    await this.client.connect();
+    try {
+      await this.client.connect();
 
-    // Create internal queue
-    await this.client.assertQueue(this.internalQueueName);
+      // Create internal queue
+      await this.client.assertQueue(this.internalQueueName);
 
-    // Assert default exchange for external events
-    await this.client.assertExchange(this.config.defaultExchange, 'topic');
+      // Assert default exchange for external events
+      await this.client.assertExchange(this.config.defaultExchange, 'topic');
 
-    this.isConnected = true;
+      this.isConnected = true;
+    } catch (error) {
+      this.isConnected = false;
+      console.error('❌ Failed to connect RabbitMQEventBus:', error);
+      throw error;
+    }
   }
 
   /**
@@ -88,8 +95,14 @@ export class RabbitMQEventBus implements IEventBus {
    * Emit an event (publish to queue or exchange)
    */
   async emit(event: string, data: any, options: EventOptions = {}): Promise<void> {
-    if (!this.isConnected) {
-      await this.connect();
+    if (!this.isConnected || !this.client.isConnected()) {
+      try {
+        await this.connect();
+      } catch (error) {
+        console.error(`❌ Failed to connect RabbitMQEventBus for emit:`, error);
+        // Allow graceful degradation - event is lost but service continues
+        return;
+      }
     }
 
     const scope = options.scope || 'internal';
@@ -97,12 +110,6 @@ export class RabbitMQEventBus implements IEventBus {
 
     if (scope === 'internal') {
       // Publish to internal queue (use empty exchange, queue name as routing key)
-      // Convert EventMessage to format compatible with RabbitMQClient
-      const message = {
-        type: eventMessage.type as any,
-        timestamp: eventMessage.timestamp,
-        data: eventMessage.data,
-      };
       const channel = this.client.getChannel();
       const buffer = Buffer.from(JSON.stringify(eventMessage));
       await channel.sendToQueue(this.internalQueueName, buffer, {
@@ -133,8 +140,13 @@ export class RabbitMQEventBus implements IEventBus {
    * Subscribe to an event
    */
   async on(event: string, handler: EventHandler, options: SubscribeOptions = {}): Promise<void> {
-    if (!this.isConnected) {
-      await this.connect();
+    if (!this.isConnected || !this.client.isConnected()) {
+      try {
+        await this.connect();
+      } catch (error) {
+        console.error(`❌ Failed to connect RabbitMQEventBus for subscribe:`, error);
+        throw error; // Subscription failures should be thrown
+      }
     }
 
     const scope = options.scope || 'internal';
@@ -165,7 +177,7 @@ export class RabbitMQEventBus implements IEventBus {
   /**
    * Unsubscribe from an event
    */
-  async off(event: string, handler: EventHandler): Promise<void> {
+  async off(_event: string, handler: EventHandler): Promise<void> {
     // Find the handler in any registry (could be internal or external)
     for (const [eventKey, registry] of this.handlers.entries()) {
       const index = registry.handlers.indexOf(handler);
@@ -220,7 +232,7 @@ export class RabbitMQEventBus implements IEventBus {
                 try {
                   await handler(eventMessage);
                 } catch (error) {
-                  console.error(`Error in event handler for ${eventKey}:`, error);
+                  await this.recordHandlerError(eventKey, eventMessage, error);
                 }
               }
             }
@@ -281,7 +293,7 @@ export class RabbitMQEventBus implements IEventBus {
               try {
                 await handler(eventMessage);
               } catch (error) {
-                console.error(`Error in event handler for ${eventKey}:`, error);
+                await this.recordHandlerError(eventKey, eventMessage, error);
               }
             }
           }
@@ -322,13 +334,6 @@ export class RabbitMQEventBus implements IEventBus {
   }
 
   /**
-   * Get internal queue name
-   */
-  private getInternalQueueName(): string {
-    return this.internalQueueName;
-  }
-
-  /**
    * Get external queue name for a routing key
    */
   private getExternalQueueName(routingKey: string): string {
@@ -348,6 +353,31 @@ export class RabbitMQEventBus implements IEventBus {
       const exchange = options.exchange || this.config.defaultExchange;
       const routingKey = options.routingKey || this.deriveRoutingKey(event);
       return `external:${exchange}:${routingKey}`;
+    }
+  }
+
+  private async recordHandlerError(eventKey: string, eventMessage: EventMessage, error: unknown): Promise<void> {
+    const message = (error as Error)?.message || String(error);
+    console.warn(`[RabbitMQEventBus] handler error for ${eventKey}: ${message}`);
+
+    if (!this.config.deadLetterExchange) {
+      return;
+    }
+
+    try {
+      await this.client.publish(this.config.deadLetterExchange, `${eventKey}.deadletter`, {
+        type: `${eventKey}.deadletter`,
+        timestamp: new Date().toISOString(),
+        data: {
+          originalEvent: eventMessage,
+          error: message,
+        },
+      } as any);
+    } catch (publishError) {
+      console.error(
+        `[RabbitMQEventBus] failed to publish dead-letter for ${eventKey}:`,
+        (publishError as Error)?.message || publishError
+      );
     }
   }
 }

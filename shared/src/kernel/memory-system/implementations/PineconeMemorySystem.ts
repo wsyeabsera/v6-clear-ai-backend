@@ -12,16 +12,26 @@ export class PineconeMemorySystem implements IMemorySystem {
   private index: ReturnType<Pinecone['Index']>;
   private embeddingService: EmbeddingService | null = null;
   private readonly VECTOR_DIMENSION = 768; // nomic-text model dimension
+  private readonly requestTimeoutMs = Number(process.env.PINECONE_TIMEOUT_MS || 10000);
+  private readonly maxRetries = Number(process.env.PINECONE_MAX_RETRIES || 2);
+
+  /**
+   * Generate a fallback vector with at least one non-zero value
+   * Pinecone serverless doesn't allow all-zero vectors
+   */
+  private getFallbackVector(): number[] {
+    const vector = new Array(this.VECTOR_DIMENSION).fill(0);
+    // Set first value to a small non-zero number to satisfy Pinecone requirement
+    vector[0] = 0.0001;
+    return vector;
+  }
 
   constructor(config: PineconeMemoryConfig) {
-    const clientConfig: { apiKey: string; environment?: string } = {
-      apiKey: config.apiKey,
-    };
-    if (config.environment) {
-      clientConfig.environment = config.environment;
-    }
-    // Type assertion needed because Pinecone types require environment, but it's optional
-    this.client = new Pinecone(clientConfig as any);
+    // Pinecone SDK v6+ (serverless) does NOT require environment property
+    // Just use the API key - the SDK handles serverless automatically
+    this.client = new Pinecone({ 
+      apiKey: config.apiKey
+    });
     this.index = this.client.Index(config.indexName);
 
     // Initialize embedding service if enabled
@@ -40,13 +50,16 @@ export class PineconeMemorySystem implements IMemorySystem {
       let vectorValues: number[];
       if (this.embeddingService) {
         try {
-          vectorValues = await this.embeddingService.generateEmbedding(content);
+          vectorValues = await this.executeWithRetry(
+            () => this.embeddingService!.generateEmbedding(content),
+            'Ollama.generateEmbedding'
+          );
         } catch (embeddingError) {
-          console.warn('Failed to generate embedding, using empty vector:', embeddingError);
-          vectorValues = this.embeddingService.getEmptyEmbedding();
+          console.warn('Failed to generate embedding, using fallback vector:', embeddingError);
+          vectorValues = this.getFallbackVector();
         }
       } else {
-        vectorValues = new Array(this.VECTOR_DIMENSION).fill(0);
+        vectorValues = this.getFallbackVector();
       }
 
       const vector = {
@@ -63,7 +76,7 @@ export class PineconeMemorySystem implements IMemorySystem {
         },
       };
 
-      await this.index.upsert([vector]);
+      await this.executeWithRetry(() => this.index.upsert([vector]), 'PineconeMemorySystem.upsert');
     } catch (error) {
       throw new Error(`Failed to store short-term memory: ${error}`);
     }
@@ -78,13 +91,16 @@ export class PineconeMemorySystem implements IMemorySystem {
       let vectorValues: number[];
       if (this.embeddingService) {
         try {
-          vectorValues = await this.embeddingService.generateEmbedding(content);
+          vectorValues = await this.executeWithRetry(
+            () => this.embeddingService!.generateEmbedding(content),
+            'Ollama.generateEmbedding'
+          );
         } catch (embeddingError) {
-          console.warn('Failed to generate embedding, using empty vector:', embeddingError);
-          vectorValues = this.embeddingService.getEmptyEmbedding();
+          console.warn('Failed to generate embedding, using fallback vector:', embeddingError);
+          vectorValues = this.getFallbackVector();
         }
       } else {
-        vectorValues = new Array(this.VECTOR_DIMENSION).fill(0);
+        vectorValues = this.getFallbackVector();
       }
 
       const vector = {
@@ -101,7 +117,7 @@ export class PineconeMemorySystem implements IMemorySystem {
         },
       };
 
-      await this.index.upsert([vector]);
+      await this.executeWithRetry(() => this.index.upsert([vector]), 'PineconeMemorySystem.upsert');
     } catch (error) {
       throw new Error(`Failed to store long-term memory: ${error}`);
     }
@@ -117,21 +133,28 @@ export class PineconeMemorySystem implements IMemorySystem {
       let queryVector: number[];
       if (this.embeddingService) {
         try {
-          queryVector = await this.embeddingService.generateEmbedding(query);
+          queryVector = await this.executeWithRetry(
+            () => this.embeddingService!.generateEmbedding(query),
+            'Ollama.generateEmbedding'
+          );
         } catch (embeddingError) {
-          console.warn('Failed to generate query embedding, using empty vector:', embeddingError);
-          queryVector = this.embeddingService.getEmptyEmbedding();
+          console.warn('Failed to generate query embedding, using fallback vector:', embeddingError);
+          queryVector = this.getFallbackVector();
         }
       } else {
-        queryVector = new Array(this.VECTOR_DIMENSION).fill(0);
+        queryVector = this.getFallbackVector();
       }
 
       // Search Pinecone
-      const queryResponse = await this.index.query({
-        vector: queryVector,
-        topK: limit || 10,
-        includeMetadata: true,
-      });
+      const queryResponse = await this.executeWithRetry(
+        () =>
+          this.index.query({
+            vector: queryVector,
+            topK: limit || 10,
+            includeMetadata: true,
+          }),
+        'PineconeMemorySystem.query'
+      );
 
       // Convert Pinecone results to Memory objects
       const memories: Memory[] = [];
@@ -161,15 +184,19 @@ export class PineconeMemorySystem implements IMemorySystem {
   async getConversationHistory(sessionId: string): Promise<Message[]> {
     try {
       // Query Pinecone for all memories with this sessionId
-      const queryResponse = await this.index.query({
-        vector: new Array(this.VECTOR_DIMENSION).fill(0), // Empty vector for metadata-only query
-        topK: 1000, // Large number to get all messages
-        includeMetadata: true,
-        filter: {
-          sessionId: { $eq: sessionId },
-          type: { $eq: 'short-term' },
-        },
-      });
+      const queryResponse = await this.executeWithRetry(
+        () =>
+          this.index.query({
+            vector: this.getFallbackVector(), // Fallback vector for metadata-only query (Pinecone doesn't allow all zeros)
+            topK: 1000, // Large number to get all messages
+            includeMetadata: true,
+            filter: {
+              sessionId: { $eq: sessionId },
+              type: { $eq: 'short-term' },
+            },
+          }),
+        'PineconeMemorySystem.historyQuery'
+      );
 
       // Extract messages from memories
       const messages: Message[] = [];
@@ -209,6 +236,35 @@ export class PineconeMemorySystem implements IMemorySystem {
   private generateMemoryId(identifier: string, type: 'short-term' | 'long-term'): string {
     const prefix = type === 'short-term' ? 'st' : 'lt';
     return `${prefix}-${identifier}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+
+  private async executeWithRetry<T>(operation: () => Promise<T>, context: string): Promise<T> {
+    let attempt = 0;
+    let lastError: unknown;
+    while (attempt <= this.maxRetries) {
+      try {
+        return await this.withTimeout(operation(), context);
+      } catch (error) {
+        lastError = error;
+        attempt++;
+        if (attempt > this.maxRetries) {
+          throw error;
+        }
+        const delay = Math.min(500 * attempt, 2000);
+        console.warn(`[${context}] attempt ${attempt} failed: ${(error as Error)?.message}; retrying in ${delay}ms`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    throw lastError as Error;
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, context: string): Promise<T> {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`${context} timed out after ${this.requestTimeoutMs}ms`)), this.requestTimeoutMs)
+      ),
+    ]);
   }
 }
 

@@ -469,9 +469,10 @@ describe('PineconeContextManager', () => {
       expect(mockUpsert).toHaveBeenCalled();
       const upsertCall = mockUpsert.mock.calls[0];
       const vectorData = upsertCall[0][0];
-      // Should use empty vector (768 zeros) when embeddings disabled
+      // Should use fallback vector (first element 0.0001, rest zeros) when embeddings disabled
       expect(vectorData.values).toHaveLength(768);
-      expect(vectorData.values.every((v: number) => v === 0)).toBe(true);
+      expect(vectorData.values[0]).toBe(0.0001);
+      expect(vectorData.values.slice(1).every((v: number) => v === 0)).toBe(true);
     });
 
     it('should use empty vector when no messages', async () => {
@@ -487,9 +488,10 @@ describe('PineconeContextManager', () => {
       expect(mockUpsert).toHaveBeenCalled();
       const upsertCall = mockUpsert.mock.calls[0];
       const vectorData = upsertCall[0][0];
-      // Should use empty vector when no messages
+      // Should use fallback vector (first element 0.0001, rest zeros) when no messages
       expect(vectorData.values).toHaveLength(768);
-      expect(vectorData.values.every((v: number) => v === 0)).toBe(true);
+      expect(vectorData.values[0]).toBe(0.0001);
+      expect(vectorData.values.slice(1).every((v: number) => v === 0)).toBe(true);
     });
   });
 
@@ -572,9 +574,7 @@ describe('PineconeContextManager', () => {
       const error = new Error('Pinecone fetch error');
       mockFetch.mockRejectedValueOnce(error);
 
-      await expect(manager.getContext(sessionId)).rejects.toThrow(
-        'Failed to get context from Pinecone: Error: Pinecone fetch error'
-      );
+      await expect(manager.getContext(sessionId)).rejects.toThrow(/Failed to get context from Pinecone/);
     });
 
     it('should throw error when saveContext fails', async () => {
@@ -584,11 +584,14 @@ describe('PineconeContextManager', () => {
         messages: [],
       };
       const error = new Error('Pinecone upsert error');
-      mockUpsert.mockRejectedValueOnce(error);
+      // Mock to fail all retry attempts
+      mockUpsert.mockRejectedValue(error);
 
-      await expect(manager.saveContext(sessionId, context)).rejects.toThrow(
-        'Failed to save context to Pinecone: Error: Pinecone upsert error'
-      );
+      // Retry mechanism will eventually rethrow the error after all retries
+      await expect(manager.saveContext(sessionId, context)).rejects.toThrow();
+      
+      // Reset mock for other tests
+      mockUpsert.mockReset();
     });
   });
 });

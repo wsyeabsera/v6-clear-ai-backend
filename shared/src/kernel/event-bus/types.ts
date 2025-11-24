@@ -49,5 +49,6 @@ export interface RabbitMQEventConfig {
   serviceName: string; // e.g., 'ai-service' - used for internal queue naming
   defaultExchange?: string; // default: serviceName
   internalQueuePrefix?: string; // default: `${serviceName}.internal`
+  deadLetterExchange?: string; // optional exchange for handler failures
 }
 

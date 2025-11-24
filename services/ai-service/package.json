@@ -1,0 +1,50 @@
+{
+  "name": "ai-service",
+  "version": "1.0.0",
+  "description": "AI interactions microservice with Ask Mode",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:unit": "vitest --run --exclude **/*.integration.test.ts",
+    "test:integration": "vitest --run -t 'Integration Tests'",
+    "test:providers": "vitest --run -t 'LLM Providers'",
+    "test:pinecone": "vitest --run -t 'Pinecone'",
+    "test:events": "vitest --run -t 'Events'",
+    "test:performance": "vitest --run -t 'Performance'",
+    "test:all": "vitest --run",
+    "test:coverage": "vitest --coverage --run",
+    "test:runner": "tsx scripts/run-tests.ts",
+    "test:runner:unit": "tsx scripts/run-tests.ts --unit-only",
+    "test:runner:integration": "tsx scripts/run-tests.ts --integration-only",
+    "test:runner:report": "tsx scripts/run-tests.ts --skip-prerequisites --skip-coverage"
+  },
+  "dependencies": {
+    "shared": "*",
+    "@apollo/server": "^4.10.0",
+    "@apollo/subgraph": "^2.6.3",
+    "graphql": "^16.8.1",
+    "graphql-tag": "^2.12.6",
+    "mongodb": "^6.3.0",
+    "dotenv": "^16.3.1",
+    "@anthropic-ai/sdk": "^0.24.0",
+    "openai": "^4.28.0",
+    "axios": "^1.6.0",
+    "uuid": "^9.0.1",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "@types/uuid": "^9.0.7",
+    "@types/jsonwebtoken": "^9.0.5",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0",
+    "@vitest/coverage-v8": "^1.2.0"
+  }
+}
+

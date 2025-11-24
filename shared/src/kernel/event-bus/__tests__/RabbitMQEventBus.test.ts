@@ -548,6 +548,48 @@ describe('RabbitMQEventBus', () => {
       expect(mockChannel.nack).toHaveBeenCalledWith(mockMsg, false, false);
       expect(handler).not.toHaveBeenCalled();
     });
+
+    it('should publish dead-letter events when a handler throws and DLX is configured', async () => {
+      eventBus = new RabbitMQEventBus({
+        serviceName: 'test-service',
+        deadLetterExchange: 'test-dead-letter',
+      });
+      await eventBus.connect();
+
+      const event = 'test.event';
+      const handler = vi.fn().mockRejectedValue(new Error('Handler error'));
+      let messageHandler: (msg: amqplib.ConsumeMessage | null) => Promise<void>;
+
+      mockChannel.consume.mockImplementation((queue: string, callback: any) => {
+        messageHandler = callback;
+        return Promise.resolve({ consumerTag: 'test-tag' });
+      });
+
+      await eventBus.on(event, handler, { scope: 'internal' });
+
+      const eventMessage: EventMessage = {
+        type: event,
+        timestamp: new Date().toISOString(),
+        data: { message: 'test' },
+      };
+
+      const mockMsg = {
+        content: Buffer.from(JSON.stringify(eventMessage)),
+      } as amqplib.ConsumeMessage;
+
+      await messageHandler!(mockMsg);
+
+      expect(mockClient.publish).toHaveBeenCalledWith(
+        'test-dead-letter',
+        expect.stringContaining(`internal:${event}.deadletter`),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            error: 'Handler error',
+            originalEvent: eventMessage,
+          }),
+        })
+      );
+    });
   });
 
   describe('disconnect', () => {

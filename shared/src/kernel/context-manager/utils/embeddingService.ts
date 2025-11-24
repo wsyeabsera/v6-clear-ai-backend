@@ -19,7 +19,7 @@ export class EmbeddingService {
 
   constructor(config?: EmbeddingConfig) {
     this.apiUrl = config?.apiUrl || process.env.OLLAMA_API_URL || 'http://localhost:11434';
-    this.model = config?.model || process.env.OLLAMA_MODEL || 'nomic-text';
+    this.model = config?.model || process.env.OLLAMA_MODEL || 'nomic-embed-text';
   }
 
   /**

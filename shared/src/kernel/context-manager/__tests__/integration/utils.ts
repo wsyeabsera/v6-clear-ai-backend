@@ -195,8 +195,23 @@ export function loadTestEnv(): {
   ollamaModel: string;
 } {
   // Load .env.test if dotenv is available
+  // Try multiple locations: current dir, parent dir, or backend root
   try {
-    require('dotenv').config({ path: '.env.test' });
+    const { resolve } = require('path');
+    const paths = [
+      resolve(process.cwd(), '.env.test'),
+      resolve(process.cwd(), '..', '.env.test'),
+      resolve(process.cwd(), '../..', 'backend', '.env.test'),
+    ];
+    
+    for (const path of paths) {
+      try {
+        require('dotenv').config({ path });
+        break; // Successfully loaded, stop trying
+      } catch {
+        // Continue to next path
+      }
+    }
   } catch (error) {
     // dotenv may not be available or .env.test may not exist
   }
@@ -208,7 +223,7 @@ export function loadTestEnv(): {
     pineconeApiKey: process.env.PINECONE_API_KEY || '',
     pineconeIndexName: process.env.PINECONE_INDEX_NAME || 'context-manager',
     ollamaApiUrl: process.env.OLLAMA_API_URL || 'http://localhost:11434',
-    ollamaModel: process.env.OLLAMA_MODEL || 'nomic-text',
+    ollamaModel: process.env.OLLAMA_MODEL || 'nomic-embed-text',
   };
 }
 
@@ -235,15 +250,33 @@ export async function checkServiceAvailability(
         const pineconeApiKey = config?.apiKey || env.pineconeApiKey;
         if (!pineconeApiKey) return false;
         
-        try {
-          const clientConfig: { apiKey: string; environment?: string } = {
-            apiKey: pineconeApiKey,
-          };
-          // Type assertion needed because Pinecone types require environment, but it's optional
-          const pinecone = new Pinecone(clientConfig as any);
-          await pinecone.describeIndex(env.pineconeIndexName);
+        // For serverless Pinecone, the SDK's availability check may fail
+        // because it tries to use controller endpoints that don't exist for serverless.
+        // If we have an API key, assume it's available and let the actual tests verify.
+        // Serverless API keys start with 'pcsk_'
+        if (pineconeApiKey.startsWith('pcsk_')) {
+          // Serverless - skip availability check, let tests verify connectivity
           return true;
-        } catch {
+        }
+        
+        // For all Pinecone (including serverless), try the standard availability check
+        try {
+          const pinecone = new Pinecone({ 
+            apiKey: pineconeApiKey
+          });
+          
+          const index = pinecone.Index(env.pineconeIndexName);
+          
+          // Try a simple query to verify the index is accessible
+          await index.query({
+            vector: new Array(768).fill(0),
+            topK: 1,
+            includeMetadata: false
+          });
+          
+          return true;
+        } catch (error: any) {
+          console.warn('Pinecone connection failed:', error?.message || error);
           return false;
         }
 

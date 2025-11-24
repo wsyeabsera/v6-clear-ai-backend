@@ -291,44 +291,79 @@ export const createResolvers = (db: Database, authService: AuthService, rabbitMQ
     },
 
     refreshToken: async (_: any, { refreshToken }: { refreshToken: string }) => {
-      try {
-        const payload = authService.verifyToken(refreshToken);
-        const authCollection = db.getAuthCollection();
+      if (!refreshToken || typeof refreshToken !== 'string' || refreshToken.trim().length === 0) {
+        throw new Error('Refresh token is required');
+      }
 
-        // Verify refresh token exists in database
+      let payload: { userId: string; email: string };
+      try {
+        payload = authService.verifyToken(refreshToken);
+      } catch (error) {
+        console.error(`❌ Refresh token verification failed:`, error);
+        throw new Error('Invalid or expired refresh token');
+      }
+
+      const authCollection = db.getAuthCollection();
+
+      try {
+        // Find the auth record for this user
         const authRecord = await authCollection.findOne({ 
-          userId: payload.userId,
-          refreshTokens: { $in: [refreshToken] }
+          userId: payload.userId
         });
 
         if (!authRecord) {
+          console.error(`❌ Auth record not found for user: ${payload.userId}`);
+          throw new Error('Invalid refresh token');
+        }
+
+        // Check if refresh token exists in the array
+        if (!authRecord.refreshTokens || !Array.isArray(authRecord.refreshTokens)) {
+          console.error(`❌ Invalid refreshTokens array for user: ${payload.userId}`);
+          throw new Error('Invalid refresh token');
+        }
+
+        const tokenExists = authRecord.refreshTokens.includes(refreshToken);
+        if (!tokenExists) {
           console.error(`❌ Refresh token not found in database for user: ${payload.userId}`);
+          console.error(`   Token array length: ${authRecord.refreshTokens.length}`);
+          console.error(`   Looking for token: ${refreshToken.substring(0, 20)}...`);
           throw new Error('Invalid refresh token');
         }
 
         // Generate new tokens
         const newTokens = authService.generateTokens(authRecord.userId, authRecord.email);
 
-        // Remove old refresh token
-        await authCollection.updateOne(
-          { userId: authRecord.userId },
+        // Update atomically: remove old token and add new one
+        // Query by userId and ensure token exists in array (MongoDB matches if value is in array)
+        const updateResult = await authCollection.updateOne(
+          { 
+            userId: payload.userId,
+            refreshTokens: refreshToken  // Matches if refreshToken is in the refreshTokens array
+          },
           {
-            $pull: { refreshTokens: refreshToken }
-          }
-        );
-
-        // Add new refresh token
-        await authCollection.updateOne(
-          { userId: authRecord.userId },
-          {
+            $pull: { refreshTokens: refreshToken },
             $push: { refreshTokens: newTokens.refreshToken },
             $set: { updatedAt: getCurrentTimestamp() }
           }
         );
 
-        console.log(`✅ Token refreshed: ${authRecord.userId}`);
+        if (updateResult.matchedCount === 0) {
+          console.error(`❌ Token was removed between check and update for user: ${payload.userId}`);
+          throw new Error('Invalid refresh token');
+        }
+
+        if (updateResult.modifiedCount === 0) {
+          console.error(`❌ Token update failed for user: ${payload.userId}`);
+          throw new Error('Failed to refresh token');
+        }
+
+        console.log(`✅ Token refreshed for user: ${payload.userId}`);
         return newTokens;
       } catch (error) {
+        // Re-throw if it's already our custom error
+        if (error instanceof Error && (error.message.includes('Invalid refresh token') || error.message.includes('Failed to refresh token'))) {
+          throw error;
+        }
         console.error(`❌ Refresh token error:`, error);
         throw new Error('Invalid or expired refresh token');
       }

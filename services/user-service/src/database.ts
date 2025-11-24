@@ -19,7 +19,14 @@ export class Database {
   constructor() {
     const uri = process.env.USER_SERVICE_MONGODB_URI || 
       'mongodb://localhost:27017/user_service';
-    this.client = new MongoClient(uri);
+    this.client = new MongoClient(uri, {
+      maxPoolSize: parseInt(process.env.MONGODB_MAX_POOL_SIZE || '10'),
+      minPoolSize: parseInt(process.env.MONGODB_MIN_POOL_SIZE || '2'),
+      maxIdleTimeMS: parseInt(process.env.MONGODB_MAX_IDLE_TIME_MS || '30000'),
+      serverSelectionTimeoutMS: parseInt(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || '5000'),
+      socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || '45000'),
+      connectTimeoutMS: parseInt(process.env.MONGODB_CONNECT_TIMEOUT_MS || '10000'),
+    });
   }
 
   async connect(): Promise<void> {
@@ -63,7 +70,12 @@ export class Database {
   }
 
   async disconnect(): Promise<void> {
-    await this.client.close();
-    console.log('✅ Disconnected from User Service database');
+    try {
+      await this.client.close();
+      console.log('✅ Disconnected from User Service database');
+    } catch (error) {
+      console.error('❌ Error disconnecting from database:', error);
+      throw error;
+    }
   }
 }

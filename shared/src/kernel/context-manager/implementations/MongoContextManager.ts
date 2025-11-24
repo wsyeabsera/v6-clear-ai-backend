@@ -1,5 +1,6 @@
 import { MongoClient, Db, Collection } from 'mongodb';
 import { IContextManager, Message, ConversationContext, MongoConfig } from '../types';
+import { KernelErrors, KernelError } from '../../errors';
 
 export class MongoContextManager implements IContextManager {
   private client: MongoClient;
@@ -10,7 +11,14 @@ export class MongoContextManager implements IContextManager {
 
   constructor(config: MongoConfig) {
     this.config = config;
-    this.client = new MongoClient(config.connectionString);
+    this.client = new MongoClient(config.connectionString, {
+      maxPoolSize: parseInt(process.env.MONGODB_MAX_POOL_SIZE || '10'),
+      minPoolSize: parseInt(process.env.MONGODB_MIN_POOL_SIZE || '2'),
+      maxIdleTimeMS: parseInt(process.env.MONGODB_MAX_IDLE_TIME_MS || '30000'),
+      serverSelectionTimeoutMS: parseInt(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || '5000'),
+      socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || '45000'),
+      connectTimeoutMS: parseInt(process.env.MONGODB_CONNECT_TIMEOUT_MS || '10000'),
+    });
   }
 
   private async ensureConnected(): Promise<void> {
@@ -31,7 +39,12 @@ export class MongoContextManager implements IContextManager {
         this.collection = this.db.collection(collectionName);
       } catch (error) {
         this.connectionPromise = null;
-        throw new Error(`Failed to connect to MongoDB: ${error}`);
+        throw KernelErrors.connectionFailed(
+          'MongoContextManager',
+          'connect',
+          error,
+          { databaseName: this.config.databaseName }
+        );
       }
     })();
 
@@ -41,7 +54,7 @@ export class MongoContextManager implements IContextManager {
   async getContext(sessionId: string): Promise<ConversationContext | null> {
     await this.ensureConnected();
     if (!this.collection) {
-      throw new Error('Collection not initialized');
+      throw KernelErrors.notInitialized('MongoContextManager', 'collection');
     }
 
     try {
@@ -57,14 +70,20 @@ export class MongoContextManager implements IContextManager {
       };
       return context;
     } catch (error) {
-      throw new Error(`Failed to get context from MongoDB: ${error}`);
+      throw KernelErrors.operationFailed(
+        'MongoContextManager',
+        'getContext',
+        undefined,
+        error,
+        { sessionId }
+      );
     }
   }
 
   async saveContext(sessionId: string, context: ConversationContext): Promise<void> {
     await this.ensureConnected();
     if (!this.collection) {
-      throw new Error('Collection not initialized');
+      throw KernelErrors.notInitialized('MongoContextManager', 'collection');
     }
 
     const contextWithMetadata: ConversationContext = {
@@ -83,14 +102,20 @@ export class MongoContextManager implements IContextManager {
         { upsert: true }
       );
     } catch (error) {
-      throw new Error(`Failed to save context to MongoDB: ${error}`);
+      throw KernelErrors.operationFailed(
+        'MongoContextManager',
+        'saveContext',
+        undefined,
+        error,
+        { sessionId }
+      );
     }
   }
 
   async addMessage(sessionId: string, message: Message): Promise<void> {
     await this.ensureConnected();
     if (!this.collection) {
-      throw new Error('Collection not initialized');
+      throw KernelErrors.notInitialized('MongoContextManager', 'collection');
     }
 
     const existingContext = await this.getContext(sessionId);
@@ -109,7 +134,13 @@ export class MongoContextManager implements IContextManager {
           { upsert: false }
         );
       } catch (error) {
-        throw new Error(`Failed to add message to MongoDB: ${error}`);
+        throw KernelErrors.operationFailed(
+          'MongoContextManager',
+          'addMessage',
+          undefined,
+          error,
+          { sessionId }
+        );
       }
     } else {
       // Create new context with message

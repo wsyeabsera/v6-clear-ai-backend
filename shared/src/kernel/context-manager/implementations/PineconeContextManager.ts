@@ -7,16 +7,26 @@ export class PineconeContextManager implements IContextManager {
   private index: ReturnType<Pinecone['Index']>;
   private embeddingService: EmbeddingService | null = null;
   private readonly VECTOR_DIMENSION = 768; // nomic-text model dimension
+  private readonly requestTimeoutMs = Number(process.env.PINECONE_TIMEOUT_MS || 10000);
+  private readonly maxRetries = Number(process.env.PINECONE_MAX_RETRIES || 2);
+
+  /**
+   * Generate a fallback vector with at least one non-zero value
+   * Pinecone serverless doesn't allow all-zero vectors
+   */
+  private getFallbackVector(): number[] {
+    const vector = new Array(this.VECTOR_DIMENSION).fill(0);
+    // Set first value to a small non-zero number to satisfy Pinecone requirement
+    vector[0] = 0.0001;
+    return vector;
+  }
 
   constructor(config: PineconeConfig) {
-    const clientConfig: { apiKey: string; environment?: string } = {
-      apiKey: config.apiKey,
-    };
-    if (config.environment) {
-      clientConfig.environment = config.environment;
-    }
-    // Type assertion needed because Pinecone types require environment, but it's optional
-    this.client = new Pinecone(clientConfig as any);
+    // Pinecone SDK v6+ (serverless) does NOT require environment property
+    // Just use the API key - the SDK handles serverless automatically
+    this.client = new Pinecone({ 
+      apiKey: config.apiKey
+    });
     this.index = this.client.Index(config.indexName);
 
     // Initialize embedding service if enabled
@@ -28,7 +38,10 @@ export class PineconeContextManager implements IContextManager {
 
   async getContext(sessionId: string): Promise<ConversationContext | null> {
     try {
-      const fetchResponse = await this.index.fetch([sessionId]);
+      const fetchResponse = await this.executeWithRetry(
+        () => this.index.fetch([sessionId]),
+        'PineconeContextManager.fetch'
+      );
       const records = fetchResponse.records || {};
 
       if (!records[sessionId]) {
@@ -54,13 +67,36 @@ export class PineconeContextManager implements IContextManager {
         }
       }
 
+      // Reconstruct metadata object, parsing any JSON-stringified values
+      const reconstructedMetadata: Record<string, any> = {};
+      
+      // Extract standard metadata fields
+      for (const [key, value] of Object.entries(metadata)) {
+        // Skip internal fields that are handled separately
+        if (key === 'sessionId' || key === 'messages') {
+          continue;
+        }
+        
+        // Parse JSON-stringified values back to their original types
+        if (typeof value === 'string') {
+          try {
+            // Try to parse as JSON (for complex objects that were stringified)
+            const parsed = JSON.parse(value);
+            reconstructedMetadata[key] = parsed;
+          } catch {
+            // If parsing fails, it's a regular string, keep it as is
+            reconstructedMetadata[key] = value;
+          }
+        } else {
+          // Primitive types (number, boolean) are kept as is
+          reconstructedMetadata[key] = value;
+        }
+      }
+
       return {
         sessionId: (metadata.sessionId as string) || sessionId,
         messages,
-        metadata: {
-          createdAt: metadata.createdAt as string | undefined,
-          updatedAt: metadata.updatedAt as string | undefined,
-        },
+        metadata: reconstructedMetadata,
       } as ConversationContext;
     } catch (error) {
       throw new Error(`Failed to get context from Pinecone: ${error}`);
@@ -87,14 +123,18 @@ export class PineconeContextManager implements IContextManager {
           .join('\n');
         
         try {
-          vectorValues = await this.embeddingService.generateEmbedding(combinedText);
+          vectorValues = await this.executeWithRetry(
+            () => this.embeddingService!.generateEmbedding(combinedText),
+            'Ollama.generateEmbedding'
+          );
         } catch (embeddingError) {
-          console.warn('Failed to generate embedding, using empty vector:', embeddingError);
-          vectorValues = this.embeddingService.getEmptyEmbedding();
+          console.warn('Failed to generate embedding, using fallback vector:', embeddingError);
+          // Pinecone serverless doesn't allow all-zero vectors, use a small random vector
+          vectorValues = this.getFallbackVector();
         }
       } else {
-        // Use empty vector if embeddings are disabled or no messages
-        vectorValues = new Array(this.VECTOR_DIMENSION).fill(0);
+        // Pinecone serverless doesn't allow all-zero vectors, use a small random vector
+        vectorValues = this.getFallbackVector();
       }
 
       // Extract messages and sessionId from metadata to avoid overwriting
@@ -118,7 +158,7 @@ export class PineconeContextManager implements IContextManager {
         },
       };
 
-      await this.index.upsert([vector]);
+      await this.executeWithRetry(() => this.index.upsert([vector]), 'PineconeContextManager.upsert');
     } catch (error) {
       throw new Error(`Failed to save context to Pinecone: ${error}`);
     }
@@ -149,6 +189,35 @@ export class PineconeContextManager implements IContextManager {
     }
 
     await this.saveContext(sessionId, context);
+  }
+
+  private async executeWithRetry<T>(operation: () => Promise<T>, context: string): Promise<T> {
+    let attempt = 0;
+    let lastError: unknown;
+    while (attempt <= this.maxRetries) {
+      try {
+        return await this.withTimeout(operation(), context);
+      } catch (error) {
+        lastError = error;
+        attempt++;
+        if (attempt > this.maxRetries) {
+          throw error;
+        }
+        const delay = Math.min(500 * attempt, 2000);
+        console.warn(`[${context}] attempt ${attempt} failed: ${(error as Error)?.message}; retrying in ${delay}ms`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    throw lastError as Error;
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, context: string): Promise<T> {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`${context} timed out after ${this.requestTimeoutMs}ms`)), this.requestTimeoutMs)
+      ),
+    ]);
   }
 }
 

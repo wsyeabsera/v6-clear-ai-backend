@@ -1,7 +1,8 @@
 import { ApolloServer } from '@apollo/server';
-import { startStandaloneServer } from '@apollo/server/standalone';
+import { expressMiddleware } from '@apollo/server/express4';
 import { buildSubgraphSchema } from '@apollo/subgraph';
 import * as dotenv from 'dotenv';
+import express from 'express';
 import { typeDefs } from './schema';
 import { createResolvers } from './resolvers';
 import { Database } from './database';
@@ -51,14 +52,53 @@ async function startServer() {
     schema: buildSubgraphSchema([{ typeDefs, resolvers }]),
   });
 
-  // Start server
-  const { url } = await startStandaloneServer(server, {
-    listen: { port: PORT },
-    context: async () => ({ db, authService, rabbitMQ }),
+  await server.start();
+
+  // Create Express app
+  const app = express();
+
+  // Health check endpoint
+  app.get('/health', async (_req, res) => {
+    const health = {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      service: 'user-service',
+      dependencies: {
+        database: 'unknown',
+        rabbitMQ: rabbitMQConnected ? 'connected' : 'disconnected',
+      },
+    };
+
+    // Check database connection
+    try {
+      const collection = db.getUsersCollection();
+      await collection.findOne({}, { limit: 1 });
+      health.dependencies.database = 'connected';
+    } catch (error) {
+      health.status = 'unhealthy';
+      health.dependencies.database = 'disconnected';
+    }
+
+    const statusCode = health.status === 'healthy' ? 200 : 503;
+    res.status(statusCode).json(health);
   });
 
-  console.log(`🚀 User Service ready at ${url}`);
-  console.log(`📊 GraphQL endpoint: ${url}graphql`);
+  // GraphQL endpoint
+  app.use(
+    '/graphql',
+    express.json(),
+    expressMiddleware(server, {
+      context: async () => ({ db, authService, rabbitMQ }),
+    })
+  );
+
+  // Start Express server
+  app.listen(PORT, () => {
+    const baseUrl = `http://localhost:${PORT}`;
+    console.log(`🚀 User Service ready at ${baseUrl}`);
+    console.log(`📊 GraphQL endpoint: ${baseUrl}/graphql`);
+    console.log(`🏥 Health check endpoint: ${baseUrl}/health`);
+  });
 
   // Graceful shutdown
   process.on('SIGTERM', async () => {
